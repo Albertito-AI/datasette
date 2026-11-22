@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   update_stable_docs:
+    if: github.repository == 'simonw/datasette'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
