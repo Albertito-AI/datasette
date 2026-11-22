@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   deploy_docker:
+    if: github.repository == 'simonw/datasette'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
