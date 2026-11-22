@@ -11,12 +11,14 @@ case "$version_spec" in
     sqlite_version="3.46.0"
     sqlite_year="2024"
     amalgamation_id="3460000"
+    amalgamation_sha256="712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5"
     builtin_fallback_urls="https://static.simonwillison.net/static/2026/sqlite-amalgamation-3460000.zip"
     ;;
   3.25 | 3.25.0)
     sqlite_version="3.25.0"
     sqlite_year="2018"
     amalgamation_id="3250000"
+    amalgamation_sha256="8eac27252908500ba65c6558d98a252024147209756418f98dd83c746877d9cf"
     builtin_fallback_urls="https://static.simonwillison.net/static/2026/sqlite-amalgamation-3250000.zip?v=1"
     ;;
   *)
@@ -49,11 +51,27 @@ filename="sqlite-amalgamation-${amalgamation_id}"
 official_url="https://www.sqlite.org/${sqlite_year}/${filename}.zip"
 download_dir="${runner_temp}/sqlite-versions/downloads"
 source_root="${runner_temp}/sqlite-versions/source"
-source_dir="${source_root}/${filename}"
 build_dir="${runner_temp}/sqlite-versions/build/${sqlite_version}"
 archive_path="${download_dir}/${filename}.zip"
 
 mkdir -p "$download_dir" "$source_root" "$build_dir"
+
+# Pins and their upstream source checks are documented beside this helper.
+verify_archive() {
+  local actual_hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_hash="$(sha256sum -- "$1")" || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    actual_hash="$(shasum -a 256 -- "$1")" || return 1
+  else
+    echo "::error::SHA-256 verification requires sha256sum or shasum" >&2
+    return 1
+  fi
+  if [ "${actual_hash%% *}" != "$amalgamation_sha256" ]; then
+    echo "::warning::SHA-256 mismatch for SQLite ${sqlite_version} archive" >&2
+    return 1
+  fi
+}
 
 download_archive() {
   local url
@@ -78,12 +96,12 @@ download_archive() {
       --connect-timeout 20 \
       --max-time 240 \
       --output "$candidate_path" \
-      "$url"; then
+      "$url" && verify_archive "$candidate_path"; then
       mv "$candidate_path" "$archive_path"
       return 0
     fi
 
-    echo "::warning::Download failed from ${url}"
+    echo "::warning::Download or integrity check failed from ${url}"
     rm -f "$candidate_path"
   done
 
@@ -91,14 +109,20 @@ download_archive() {
   return 1
 }
 
-if [ ! -f "${source_dir}/sqlite3.c" ]; then
-  if [ ! -f "$archive_path" ]; then
-    download_archive
-  fi
-
-  rm -rf "$source_dir"
-  unzip -q "$archive_path" -d "$source_root"
+if [ ! -f "$archive_path" ]; then
+  download_archive
 fi
+if ! verify_archive "$archive_path"; then
+  echo "::error::Cached SQLite archive failed verification; remove it before retrying" >&2
+  exit 1
+fi
+
+# Never compile a source directory left by an earlier invocation. Only the
+# verified archive is cached; every build gets a fresh, private extraction.
+source_stage="$(mktemp -d "${source_root}/${filename}.XXXXXX")"
+trap 'rm -rf "$source_stage"' EXIT
+source_dir="${source_stage}/${filename}"
+unzip -q "$archive_path" -d "$source_stage"
 
 if [ ! -f "${source_dir}/sqlite3.c" ]; then
   echo "::error::Expected ${source_dir}/sqlite3.c after extracting ${archive_path}"
